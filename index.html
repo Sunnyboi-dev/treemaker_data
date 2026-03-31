@@ -3,9 +3,9 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>3D Roblox Tree Architect - Live Valuation</title>
+    <title>3D Roblox Tree Architect - Pro Export</title>
     <style>
-        :root { --bg: #1e1e24; --panel: #2b2b36; --text: #e0e0e0; --accent: #ff9800; --border: #444; }
+        :root { --bg: #1e1e24; --panel: #2b2b36; --text: #e0e0e0; --accent: #ff9800; --blue: #2196F3; --border: #444; }
         body { font-family: 'Segoe UI', Tahoma, sans-serif; margin: 0; display: flex; height: 100vh; background: var(--bg); color: var(--text); overflow: hidden; }
         .sidebar { width: 440px; background: var(--panel); padding: 15px; overflow-y: auto; box-shadow: 2px 0 10px rgba(0,0,0,0.5); font-size: 13px; z-index: 10; }
         .sidebar::-webkit-scrollbar { width: 8px; }
@@ -33,12 +33,14 @@
         .badge { background: rgba(0,0,0,0.7); padding: 8px 12px; border-radius: 5px; font-weight: bold; color: white; display: flex; align-items: center;}
         .badge-green { background: rgba(46, 125, 50, 0.9); border: 1px solid #4caf50; }
         button.action-btn { background: var(--accent); color: #111; border: none; padding: 8px 15px; border-radius: 5px; font-weight: bold; cursor: pointer; transition: 0.2s; box-shadow: 0 2px 5px rgba(0,0,0,0.3);}
-        button.action-btn:hover { background: #ffb74d; transform: translateY(-1px); }
+        button.action-btn:hover { filter: brightness(1.1); transform: translateY(-1px); }
+        .btn-blue { background: var(--blue); color: white; }
         
         #loadingMsg { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); background: rgba(0,0,0,0.8); padding: 15px 30px; border-radius: 8px; display: none; color: white; font-weight: bold; z-index: 5; font-size: 18px; border: 1px solid var(--accent);}
     </style>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
 </head>
 <body>
 
@@ -50,6 +52,7 @@
     <div class="canvas-container" id="canvasContainer">
         <div id="topBar">
             <button class="action-btn" onclick="forceReRoll()">🎲 Generate New Seed</button>
+            <button class="action-btn btn-blue" onclick="downloadZip()">💾 Download ZIP</button>
             <div id="partCounter" class="badge">Parts: 0</div>
             <div id="valueCounter" class="badge badge-green">💵 Log: $0 | Plank: $0</div>
         </div>
@@ -63,8 +66,8 @@
 
 <script>
     const loadedTextures = { ScriptIn: null, BarkContents: null, LeavesIn: null };
+    const rawFiles = { ScriptIn: null, BarkContents: null, LeavesIn: null };
 
-    // Dictionary for better UI labels
     const friendlyNames = {
         'ScriptIn': 'Inner Wood Texture (ScriptIn)',
         'BarkContents': 'Bark Texture (BarkContents)',
@@ -108,6 +111,7 @@
     window.handleImageUpload = function(event, propName) {
         const file = event.target.files[0];
         if (file) {
+            rawFiles[propName] = file; // Store raw file for ZIP export
             const reader = new FileReader();
             reader.onload = function(e) {
                 const loader = new THREE.TextureLoader();
@@ -119,10 +123,48 @@
             };
             reader.readAsDataURL(file);
         } else {
+            rawFiles[propName] = null;
             loadedTextures[propName] = null;
             updateAll();
         }
     };
+
+    // --- ZIP Exporter Logic ---
+    async function downloadZip() {
+        const zip = new JSZip();
+        const treeName = getVal('Name') || 'CustomTree';
+        
+        // 1. Add the Lua Script
+        const luaCode = document.getElementById('luaOutput').value;
+        zip.file(treeName + '.lua', luaCode);
+        
+        // 2. Add and rename any uploaded Images
+        const decalProps = ['ScriptIn', 'BarkContents', 'LeavesIn'];
+        decalProps.forEach(prop => {
+            const file = rawFiles[prop];
+            if (file) {
+                const ext = file.name.split('.').pop() || 'png';
+                const newFilename = `${prop}.${ext}`; // e.g. ScriptIn.png
+                zip.file(newFilename, file);
+            }
+        });
+
+        // Generate the zip and trigger download
+        try {
+            const blob = await zip.generateAsync({type: "blob"});
+            const url = window.URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.style.display = 'none';
+            a.href = url;
+            a.download = treeName + '_Export.zip';
+            document.body.appendChild(a);
+            a.click();
+            window.URL.revokeObjectURL(url);
+            document.body.removeChild(a);
+        } catch(err) {
+            alert("Error generating ZIP: " + err);
+        }
+    }
 
     function createUI() {
         const sidebar = document.getElementById('sidebar');
@@ -133,7 +175,7 @@
             
             for (const [propName, config] of Object.entries(props)) {
                 const type = config[1];
-                const displayName = friendlyNames[propName] || propName; // Apply custom label if it exists
+                const displayName = friendlyNames[propName] || propName;
 
                 const div = document.createElement('div');
                 div.className = 'input-group';
@@ -208,25 +250,22 @@
     ground.rotation.x = -Math.PI / 2;
     scene.add(ground);
 
-    // Add classic Roblox "Noob" Dummy for accurate 1:1 scale reference
     function addRobloxDummy() {
         const dummyGroup = new THREE.Group();
-        
-        const yellowMat = new THREE.MeshStandardMaterial({ color: 0xf4ea31, roughness: 0.8 }); // Bright Yellow
-        const blueMat = new THREE.MeshStandardMaterial({ color: 0x0055af, roughness: 0.8 });   // Bright Blue
-        const greenMat = new THREE.MeshStandardMaterial({ color: 0x8bbb13, roughness: 0.8 });  // Br. Yellowish Green
+        const yellowMat = new THREE.MeshStandardMaterial({ color: 0xf4ea31, roughness: 0.8 }); 
+        const blueMat = new THREE.MeshStandardMaterial({ color: 0x0055af, roughness: 0.8 });   
+        const greenMat = new THREE.MeshStandardMaterial({ color: 0x8bbb13, roughness: 0.8 });  
 
-        // Dimensions (Total height = 5 studs)
         const torso = new THREE.Mesh(new THREE.BoxGeometry(2, 2, 1), blueMat);
-        torso.position.y = 3; // Legs(2) + Half Torso(1) = 3
+        torso.position.y = 3; 
         dummyGroup.add(torso);
 
         const head = new THREE.Mesh(new THREE.BoxGeometry(1.2, 1.2, 1.2), yellowMat);
-        head.position.y = 4.6; // Legs(2) + Torso(2) + Half Head(0.6) = 4.6
+        head.position.y = 4.6; 
         dummyGroup.add(head);
 
         const lArm = new THREE.Mesh(new THREE.BoxGeometry(1, 2, 1), yellowMat);
-        lArm.position.set(-1.5, 3, 0); // Torso width is 2, so edge is -1, arm center is -1.5
+        lArm.position.set(-1.5, 3, 0); 
         dummyGroup.add(lArm);
 
         const rArm = new THREE.Mesh(new THREE.BoxGeometry(1, 2, 1), yellowMat);
@@ -241,12 +280,11 @@
         rLeg.position.set(0.5, 1, 0);
         dummyGroup.add(rLeg);
 
-        // Position it slightly off to the side (Left 10 studs, Forward 10 studs)
         dummyGroup.position.set(-10, 0, 10);
         scene.add(dummyGroup);
     }
     
-    addRobloxDummy(); // Spawn the scale reference
+    addRobloxDummy(); 
 
     let treeGroup = new THREE.Group();
     scene.add(treeGroup);
@@ -467,10 +505,9 @@
             let barkThick = getVal('BarkThickness');
             
             let partCount = 0;
-            let totalWoodVolume = 0; // Tracks total cubic studs for the tree
+            let totalWoodVolume = 0;
 
             for (let sec of sections) {
-                // Volume Calculation: Width * Length * Depth
                 totalWoodVolume += (sec.thickness * sec.length * sec.thickness);
 
                 let woodGroup = new THREE.Group();
@@ -577,7 +614,6 @@
             document.getElementById('partCounter').innerText = `Parts: ${partCount}${limitWarning}`;
             document.getElementById('partCounter').style.color = partCount >= 8000 ? '#f44336' : 'white';
             
-            // Calculate Value using Furnace Math
             let logValue = getVal('LogValue');
             let plankValue = getVal('PlankValue');
             let finalLogValue = Math.round((totalWoodVolume * logValue) / 10);
@@ -599,8 +635,10 @@
 
         const decalProps = ['ScriptIn', 'BarkContents', 'LeavesIn'];
         decalProps.forEach(prop => {
-            if (loadedTextures[prop]) {
-                code += `\n    local decals_${prop} = {}\n    for _, face in pairs({Enum.NormalId.Front,Enum.NormalId.Back,Enum.NormalId.Top,Enum.NormalId.Bottom,Enum.NormalId.Left,Enum.NormalId.Right}) do\n        local decal = Instance.new("Decal")\n        decal.Face = face\n        decal.Texture = "rbxasset://0" -- Replace with actual image asset ID\n        table.insert(decals_${prop}, decal)\n    end\n`;
+            if (rawFiles[prop]) {
+                const ext = rawFiles[prop].name.split('.').pop() || 'png';
+                const filename = `${prop}.${ext}`;
+                code += `\n    local decals_${prop} = {}\n    for _, face in pairs({Enum.NormalId.Front,Enum.NormalId.Back,Enum.NormalId.Top,Enum.NormalId.Bottom,Enum.NormalId.Left,Enum.NormalId.Right}) do\n        local decal = Instance.new("Decal")\n        decal.Face = face\n        decal.Texture = "rbxassetid://0" -- UPLOAD [ ${filename} ] AND PASTE ASSET ID HERE\n        table.insert(decals_${prop}, decal)\n    end\n`;
             }
         });
 
@@ -611,18 +649,18 @@
 
         code += `\n    --------------[[ Appearance ]]--------------\n    newtree.WoodColor = ${rblxColor(getVal('WoodColor'))}\n    newtree.WoodMaterial = ${mat(getVal('WoodMaterial'))}\n    newtree.WoodReflectance = ${getVal('WoodReflectance')}\n`;
         
-        if (loadedTextures.ScriptIn) code += `    newtree.ScriptIn = decals_ScriptIn\n`;
+        if (rawFiles.ScriptIn) code += `    newtree.ScriptIn = decals_ScriptIn\n`;
         
         code += `    \n    newtree.BarkColor = ${rblxColor(getVal('BarkColor'))}\n    newtree.BarkMaterial = ${mat(getVal('BarkMaterial'))}\n    newtree.BarkThickness = ${getVal('BarkThickness')}\n    newtree.BarkReflectance = ${getVal('BarkReflectance')}\n`;
 
-        if (loadedTextures.BarkContents) code += `    newtree.BarkContents = decals_BarkContents\n`;
+        if (rawFiles.BarkContents) code += `    newtree.BarkContents = decals_BarkContents\n`;
         if (getVal('BarkTransparency') > 0) code += `    newtree.BarkTransparency = ${getVal('BarkTransparency')}\n`;
         if (getVal('BarkTextureId') !== '') code += `    newtree.BarkTextureId = "${getVal('BarkTextureId')}"\n`;
         if (getVal('BarkMesh') !== '') code += `    newtree.BarkMesh = "${getVal('BarkMesh')}"\n`;
         if (getVal('Bamboo')) code += `    newtree.Bamboo = true\n`;
         if (getVal('CustomModel') !== '') code += `    newtree.CustomModel = "${getVal('CustomModel')}"\n`;
 
-        let leavesInStr = loadedTextures.LeavesIn ? `, LeavesIn = decals_LeavesIn` : ``;
+        let leavesInStr = rawFiles.LeavesIn ? `, LeavesIn = decals_LeavesIn` : ``;
         code += `\n    newtree.LeafColors={{Material=${mat(getVal('LeafMaterial'))}, Color=${rblxColor(getVal('LeafColor'))}${leavesInStr}}}\n    newtree.NumLeafParts = ${rng('NumLeafParts')}\n    newtree.LeafAngle = { X = ${rng('LeafAngleX')}, Y = ${rng('LeafAngleY')}, Z = ${rng('LeafAngleZ')} }\n    newtree.LeafSizeFactor = { X = ${rng('LeafSizeX')}, Y = ${rng('LeafSizeY')}, Z = ${rng('LeafSizeZ')} }\n`;
 
         if (getVal('HasFruit')) {
