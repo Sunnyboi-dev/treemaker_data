@@ -1,0 +1,652 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>3D Roblox Tree Architect - Live Valuation</title>
+    <style>
+        :root { --bg: #1e1e24; --panel: #2b2b36; --text: #e0e0e0; --accent: #ff9800; --border: #444; }
+        body { font-family: 'Segoe UI', Tahoma, sans-serif; margin: 0; display: flex; height: 100vh; background: var(--bg); color: var(--text); overflow: hidden; }
+        .sidebar { width: 440px; background: var(--panel); padding: 15px; overflow-y: auto; box-shadow: 2px 0 10px rgba(0,0,0,0.5); font-size: 13px; z-index: 10; }
+        .sidebar::-webkit-scrollbar { width: 8px; }
+        .sidebar::-webkit-scrollbar-thumb { background: #555; border-radius: 4px; }
+        .main { flex-grow: 1; display: flex; flex-direction: column; padding: 15px; gap: 15px; position: relative;}
+        .canvas-container { flex: 1; background: #2c3e50; border-radius: 8px; border: 2px solid var(--border); overflow: hidden; position: relative; }
+        .code-container { height: 35%; display: flex; flex-direction: column; }
+        textarea { flex-grow: 1; background: #111; color: #a5d6ff; font-family: Consolas, monospace; padding: 10px; border-radius: 8px; border: 1px solid var(--border); resize: none; white-space: pre; font-size: 12px; }
+        
+        h2 { margin-top: 0; color: var(--accent); border-bottom: 1px solid var(--border); padding-bottom: 5px; }
+        details { margin-bottom: 10px; background: #333340; padding: 5px 10px; border-radius: 5px; border-left: 3px solid var(--border);}
+        details[open] { border-left-color: var(--accent); }
+        summary { font-weight: bold; cursor: pointer; padding: 5px 0; outline: none; }
+        
+        .input-group { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; padding: 2px 0; border-bottom: 1px dashed #444; }
+        .input-group:last-child { border-bottom: none; }
+        .input-group label { flex: 1; color: #ccc; }
+        .controls { display: flex; gap: 5px; flex: 1; justify-content: flex-end; align-items: center;}
+        input[type="number"], input[type="text"], select, input[type="color"] { width: 60px; padding: 4px; background: #1e1e24; color: white; border: 1px solid #555; border-radius: 3px; font-size: 12px; }
+        input[type="text"], select { width: 100px; }
+        input[type="file"] { width: 160px; font-size: 11px; color: #aaa; }
+        input[type="checkbox"] { width: 18px; height: 18px; cursor: pointer; accent-color: var(--accent); }
+        
+        #topBar { position: absolute; top: 10px; left: 10px; display: flex; gap: 10px; z-index: 5; flex-wrap: wrap;}
+        .badge { background: rgba(0,0,0,0.7); padding: 8px 12px; border-radius: 5px; font-weight: bold; color: white; display: flex; align-items: center;}
+        .badge-green { background: rgba(46, 125, 50, 0.9); border: 1px solid #4caf50; }
+        button.action-btn { background: var(--accent); color: #111; border: none; padding: 8px 15px; border-radius: 5px; font-weight: bold; cursor: pointer; transition: 0.2s; box-shadow: 0 2px 5px rgba(0,0,0,0.3);}
+        button.action-btn:hover { background: #ffb74d; transform: translateY(-1px); }
+        
+        #loadingMsg { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); background: rgba(0,0,0,0.8); padding: 15px 30px; border-radius: 8px; display: none; color: white; font-weight: bold; z-index: 5; font-size: 18px; border: 1px solid var(--accent);}
+    </style>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+</head>
+<body>
+
+<div class="sidebar" id="sidebar">
+    <h2>Tree Architect</h2>
+</div>
+
+<div class="main">
+    <div class="canvas-container" id="canvasContainer">
+        <div id="topBar">
+            <button class="action-btn" onclick="forceReRoll()">🎲 Generate New Seed</button>
+            <div id="partCounter" class="badge">Parts: 0</div>
+            <div id="valueCounter" class="badge badge-green">💵 Log: $0 | Plank: $0</div>
+        </div>
+        <div id="loadingMsg">Growing Tree...</div>
+    </div>
+    <div class="code-container">
+        <h3 style="margin:0 0 5px 0; color:var(--accent);">Generated Lua Script (Ready to Copy)</h3>
+        <textarea id="luaOutput" readonly></textarea>
+    </div>
+</div>
+
+<script>
+    const loadedTextures = { ScriptIn: null, BarkContents: null, LeavesIn: null };
+
+    // Dictionary for better UI labels
+    const friendlyNames = {
+        'ScriptIn': 'Inner Wood Texture (ScriptIn)',
+        'BarkContents': 'Bark Texture (BarkContents)',
+        'LeavesIn': 'Leaf Texture (LeavesIn)'
+    };
+
+    const state = {
+        Stats: { Name: ['CustomTree', 'string'], Hardness: [5.5, 'num'], LogValue: [1000, 'num'], PlankValue: [2000, 'num'] },
+        App_Wood: {
+            WoodColor: ['#f3c78b', 'color', 'Brick yellow'], WoodMaterial: ['Wood', 'mat'], WoodReflectance: [0, 'num'], 
+            Blocky: [false, 'bool'], Massless: [false, 'bool'], ScriptIn: [null, 'image']
+        },
+        App_Bark: {
+            BarkColor: ['#8b5a2b', 'color', 'Sand red'], BarkMaterial: ['Concrete', 'mat'], BarkThickness: [0.1, 'num'], 
+            BarkTransparency: [0, 'num'], BarkReflectance: [0, 'num'], Bamboo: [false, 'bool'], 
+            BarkTextureId: ['', 'string'], BarkMesh: ['', 'string'], CustomModel: ['', 'string'], BarkContents: [null, 'image']
+        },
+        App_Leaves: {
+            LeafColor: ['#228b22', 'color', 'Dark green'], LeafMaterial: ['Grass', 'mat'], 
+            NumLeafParts: [{min:1, max:2}, 'range'], LeavesIn: [null, 'image'],
+            LeafAngleX: [{min:-20, max:20}, 'range'], LeafAngleY: [{min:-40, max:40}, 'range'], LeafAngleZ: [{min:-20, max:20}, 'range'],
+            LeafSizeX: [{min:5, max:7}, 'range'], LeafSizeY: [{min:2, max:2}, 'range'], LeafSizeZ: [{min:5, max:7}, 'range']
+        },
+        Features_Fruit: {
+            HasFruit: [false, 'bool'], FruitAmount: [{min:1, max:4}, 'range'], FruitScale: [{min:1, max:5}, 'range'], FruitValue: [100000, 'num']
+        },
+        Core_Growth: {
+            GrowInterval: [{min:10, max:17}, 'range'], MaxGrowCalls: [{min:30, max:50}, 'range'], NewBranchCutoff: [10, 'num'], LifetimePerVolume: [45, 'num'], LeafDropTime: [140, 'num'],
+            SeedThickness: [{min:0.5, max:0.8}, 'range'], ThicknessGrow: [{min:0.02, max:0.028}, 'range'], LengthGrow: [{min:0.55, max:0.65}, 'range']
+        },
+        Reductions: { BendThicknessReduce: [{min:0.05, max:0.08}, 'range'], SplitThicknessReduce: [{min:0.18, max:0.28}, 'range'] },
+        Trunk_Distances: { TrunkAnglePhi: [{min:0, max:8}, 'range'], TrunkAngleTheta: [{min:0, max:360}, 'range'], TrunkDistBend: [{min:10, max:15}, 'range'], TrunkDistSplit: [{min:7, max:10}, 'range'], TrunkDistBranch: [{min:6, max:10}, 'range'] },
+        Splitting: { DistSplits: [{min:6, max:13}, 'range'], NumSplits: [{min:2, max:3}, 'range'], SplitAngle: [{min:0, max:45}, 'range'], AllowableSplitAngle: [{min:50, max:160}, 'range'], SplitYConst: [{min:-0.1, max:1}, 'range'] },
+        Bending: { DistBends: [{min:4, max:16}, 'range'], BendAngle: [{min:5, max:32}, 'range'], BendYConst: [{min:-0.1, max:1}, 'range'] },
+        Branching: { DistBranch: [{min:4, max:10}, 'range'], NumBranches: [{min:1, max:2}, 'range'], BranchAngle: [{min:80, max:110}, 'range'], AllowableBranchAngle: [{min:30, max:180}, 'range'], BranchYConst: [{min:-0.6, max:1}, 'range'] },
+        Misc: { SpaceCheckDist: [10, 'num'], SpaceCheckAngle: [15, 'num'], NumNewSegmentAttempts: [250, 'num'], MinSpawnDist: [60, 'num'], MoveTroll: [false, 'bool'] }
+    };
+
+    const materialOptions = ['Wood', 'Neon', 'Glass', 'Foil', 'Concrete', 'Grass', 'Slate', 'SmoothPlastic'];
+
+    window.handleImageUpload = function(event, propName) {
+        const file = event.target.files[0];
+        if (file) {
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                const loader = new THREE.TextureLoader();
+                loader.load(e.target.result, function(texture) {
+                    texture.colorSpace = THREE.SRGBColorSpace;
+                    loadedTextures[propName] = texture;
+                    updateAll();
+                });
+            };
+            reader.readAsDataURL(file);
+        } else {
+            loadedTextures[propName] = null;
+            updateAll();
+        }
+    };
+
+    function createUI() {
+        const sidebar = document.getElementById('sidebar');
+        for (const [groupName, props] of Object.entries(state)) {
+            const details = document.createElement('details');
+            details.open = ['Stats', 'App_Wood', 'App_Bark'].includes(groupName);
+            details.innerHTML = `<summary>${groupName.replace('_', ' ')}</summary>`;
+            
+            for (const [propName, config] of Object.entries(props)) {
+                const type = config[1];
+                const displayName = friendlyNames[propName] || propName; // Apply custom label if it exists
+
+                const div = document.createElement('div');
+                div.className = 'input-group';
+                
+                let controlsHTML = '';
+                if (type === 'range') {
+                    controlsHTML = `<input type="number" id="${propName}_min" value="${config[0].min}" step="any" onchange="updateAll()">
+                                    <input type="number" id="${propName}_max" value="${config[0].max}" step="any" onchange="updateAll()">`;
+                } else if (type === 'color') {
+                    controlsHTML = `<input type="text" id="${propName}_rblx" value="${config[2]}" title="Roblox BrickColor Name" onchange="updateAll()">
+                                    <input type="color" id="${propName}_hex" value="${config[0]}" onchange="updateAll()">`;
+                } else if (type === 'mat') {
+                    controlsHTML = `<select id="${propName}" onchange="updateAll()">` + 
+                        materialOptions.map(m => `<option value="${m}" ${config[0]===m?'selected':''}>${m}</option>`).join('') + `</select>`;
+                } else if (type === 'bool') {
+                    controlsHTML = `<input type="checkbox" id="${propName}" ${config[0] ? 'checked' : ''} onchange="updateAll()">`;
+                } else if (type === 'image') {
+                    controlsHTML = `<input type="file" id="${propName}" accept="image/*" onchange="handleImageUpload(event, '${propName}')">`;
+                } else {
+                    controlsHTML = `<input type="number" id="${propName}" value="${config[0]}" step="any" onchange="updateAll()">`;
+                    if(type === 'string') controlsHTML = `<input type="text" id="${propName}" value="${config[0]}" onchange="updateAll()">`;
+                }
+                div.innerHTML = `<label>${displayName}</label><div class="controls">${controlsHTML}</div>`;
+                details.appendChild(div);
+            }
+            sidebar.appendChild(details);
+        }
+    }
+
+    function getVal(prop) {
+        for (const group of Object.values(state)) {
+            if (group[prop]) {
+                const type = group[prop][1];
+                if (type === 'range') return { min: parseFloat(document.getElementById(`${prop}_min`).value)||0, max: parseFloat(document.getElementById(`${prop}_max`).value)||0 };
+                if (type === 'color') return { hex: document.getElementById(`${prop}_hex`).value, rblx: document.getElementById(`${prop}_rblx`).value };
+                if (type === 'num') return parseFloat(document.getElementById(prop).value)||0;
+                if (type === 'bool') return document.getElementById(prop).checked;
+                if (type === 'image') return loadedTextures[prop];
+                return document.getElementById(prop).value;
+            }
+        }
+        return null;
+    }
+    function getAvg(propName) {
+        let val = getVal(propName);
+        return val ? (val.min + val.max) / 2 : 0;
+    }
+    function randomRange(propName) {
+        let val = getVal(propName);
+        return val.min + (Math.random() * (val.max - val.min));
+    }
+
+    const container = document.getElementById('canvasContainer');
+    const scene = new THREE.Scene();
+    scene.fog = new THREE.FogExp2(0x2c3e50, 0.002);
+    const camera = new THREE.PerspectiveCamera(60, container.clientWidth / container.clientHeight, 0.1, 1000);
+    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+    renderer.setSize(container.clientWidth, container.clientHeight);
+    container.appendChild(renderer.domElement);
+
+    const controls = new THREE.OrbitControls(camera, renderer.domElement);
+    camera.position.set(0, 40, 70);
+    controls.target.set(0, 20, 0);
+
+    const ambientLight = new THREE.AmbientLight(0xffffff, 0.7);
+    scene.add(ambientLight);
+    const dirLight = new THREE.DirectionalLight(0xffffff, 1.2);
+    dirLight.position.set(30, 60, -30);
+    scene.add(dirLight);
+
+    const ground = new THREE.Mesh(new THREE.PlaneGeometry(300, 300), new THREE.MeshStandardMaterial({ color: 0x1a3311, roughness: 1 }));
+    ground.rotation.x = -Math.PI / 2;
+    scene.add(ground);
+
+    // Add classic Roblox "Noob" Dummy for accurate 1:1 scale reference
+    function addRobloxDummy() {
+        const dummyGroup = new THREE.Group();
+        
+        const yellowMat = new THREE.MeshStandardMaterial({ color: 0xf4ea31, roughness: 0.8 }); // Bright Yellow
+        const blueMat = new THREE.MeshStandardMaterial({ color: 0x0055af, roughness: 0.8 });   // Bright Blue
+        const greenMat = new THREE.MeshStandardMaterial({ color: 0x8bbb13, roughness: 0.8 });  // Br. Yellowish Green
+
+        // Dimensions (Total height = 5 studs)
+        const torso = new THREE.Mesh(new THREE.BoxGeometry(2, 2, 1), blueMat);
+        torso.position.y = 3; // Legs(2) + Half Torso(1) = 3
+        dummyGroup.add(torso);
+
+        const head = new THREE.Mesh(new THREE.BoxGeometry(1.2, 1.2, 1.2), yellowMat);
+        head.position.y = 4.6; // Legs(2) + Torso(2) + Half Head(0.6) = 4.6
+        dummyGroup.add(head);
+
+        const lArm = new THREE.Mesh(new THREE.BoxGeometry(1, 2, 1), yellowMat);
+        lArm.position.set(-1.5, 3, 0); // Torso width is 2, so edge is -1, arm center is -1.5
+        dummyGroup.add(lArm);
+
+        const rArm = new THREE.Mesh(new THREE.BoxGeometry(1, 2, 1), yellowMat);
+        rArm.position.set(1.5, 3, 0);
+        dummyGroup.add(rArm);
+
+        const lLeg = new THREE.Mesh(new THREE.BoxGeometry(1, 2, 1), greenMat);
+        lLeg.position.set(-0.5, 1, 0);
+        dummyGroup.add(lLeg);
+
+        const rLeg = new THREE.Mesh(new THREE.BoxGeometry(1, 2, 1), greenMat);
+        rLeg.position.set(0.5, 1, 0);
+        dummyGroup.add(rLeg);
+
+        // Position it slightly off to the side (Left 10 studs, Forward 10 studs)
+        dummyGroup.position.set(-10, 0, 10);
+        scene.add(dummyGroup);
+    }
+    
+    addRobloxDummy(); // Spawn the scale reference
+
+    let treeGroup = new THREE.Group();
+    scene.add(treeGroup);
+
+    window.addEventListener('resize', () => {
+        camera.aspect = container.clientWidth / container.clientHeight;
+        camera.updateProjectionMatrix();
+        renderer.setSize(container.clientWidth, container.clientHeight);
+    });
+
+    const texCache = {};
+    function getProceduralTexture(type, hexColor) {
+        const key = `${type}_${hexColor}`;
+        if (texCache[key]) return texCache[key];
+
+        const canvas = document.createElement('canvas');
+        canvas.width = 256; canvas.height = 256;
+        const ctx = canvas.getContext('2d');
+        
+        ctx.fillStyle = hexColor;
+        ctx.fillRect(0, 0, 256, 256);
+
+        if (type === 'Concrete') {
+            for (let i = 0; i < 20000; i++) {
+                ctx.fillStyle = Math.random() > 0.5 ? 'rgba(0,0,0,0.06)' : 'rgba(255,255,255,0.06)';
+                ctx.fillRect(Math.random() * 256, Math.random() * 256, 1 + Math.random()*2, 1 + Math.random()*2);
+            }
+        } else if (type === 'Grass') {
+            for (let i = 0; i < 15000; i++) {
+                ctx.fillStyle = Math.random() > 0.5 ? 'rgba(0,0,0,0.12)' : 'rgba(255,255,255,0.12)';
+                ctx.fillRect(Math.random() * 256, Math.random() * 256, 2, 3 + Math.random()*4);
+            }
+        } else if (type === 'Wood') {
+            for (let i = 0; i < 3000; i++) {
+                ctx.fillStyle = Math.random() > 0.5 ? 'rgba(0,0,0,0.04)' : 'rgba(255,255,255,0.04)';
+                ctx.fillRect(Math.random() * 256, Math.random() * 256, 1, 10 + Math.random() * 40);
+            }
+        } else if (type === 'Slate') {
+            for (let i = 0; i < 8000; i++) {
+                ctx.fillStyle = Math.random() > 0.5 ? 'rgba(0,0,0,0.09)' : 'rgba(255,255,255,0.09)';
+                let size = 2 + Math.random() * 10;
+                ctx.fillRect(Math.random() * 256, Math.random() * 256, size, size);
+            }
+        } else if (type === 'Foil') {
+            for (let i = 0; i < 5000; i++) {
+                ctx.fillStyle = Math.random() > 0.5 ? 'rgba(0,0,0,0.15)' : 'rgba(255,255,255,0.15)';
+                ctx.beginPath();
+                ctx.moveTo(Math.random()*256, Math.random()*256);
+                ctx.lineTo(Math.random()*256, Math.random()*256);
+                ctx.strokeStyle = ctx.fillStyle;
+                ctx.stroke();
+            }
+        }
+
+        const tex = new THREE.CanvasTexture(canvas);
+        tex.wrapS = THREE.RepeatWrapping;
+        tex.wrapT = THREE.RepeatWrapping;
+        tex.repeat.set(1, 1);
+        texCache[key] = tex;
+        return tex;
+    }
+
+    function createMat(hexColor, matType, reflectance, transparency = 0) {
+        let opts = { color: hexColor };
+        let rough = Math.max(0.1, 0.8 - (reflectance * 0.7)); 
+        let metal = reflectance * 0.8;
+
+        if (transparency > 0) {
+            opts.transparent = true;
+            opts.opacity = Math.max(0.1, 1 - transparency);
+            opts.depthWrite = false;
+        }
+
+        if (matType === 'Neon') return new THREE.MeshStandardMaterial({ color: hexColor, emissive: hexColor, emissiveIntensity: 1, ...opts });
+        if (matType === 'Glass') return new THREE.MeshPhysicalMaterial({ color: hexColor, transmission: 0.9, transparent: true, opacity: 1, roughness: 0.05, ior: 1.5, ...opts });
+        if (matType === 'SmoothPlastic') return new THREE.MeshStandardMaterial({ roughness: 0.3, metalness: 0.1, ...opts });
+        
+        let proceduralTypes = ['Concrete', 'Grass', 'Wood', 'Slate', 'Foil'];
+        if (proceduralTypes.includes(matType)) {
+            opts.map = getProceduralTexture(matType, hexColor);
+            opts.color = 0xffffff; 
+        }
+
+        if (matType === 'Foil') return new THREE.MeshStandardMaterial({ metalness: 1, roughness: 0.3, ...opts });
+        return new THREE.MeshStandardMaterial({ roughness: rough, metalness: metal, ...opts });
+    }
+
+    function attachDecalsToGroup(group, w, h, d, texture) {
+        const decalMat = new THREE.MeshBasicMaterial({ map: texture, transparent: true, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -4 });
+        const pad = 0.01;
+
+        let pFront = new THREE.Mesh(new THREE.PlaneGeometry(w, h), decalMat); pFront.position.z = d/2 + pad; group.add(pFront);
+        let pBack = new THREE.Mesh(new THREE.PlaneGeometry(w, h), decalMat); pBack.position.z = -d/2 - pad; pBack.rotation.y = Math.PI; group.add(pBack);
+        let pRight = new THREE.Mesh(new THREE.PlaneGeometry(d, h), decalMat); pRight.position.x = w/2 + pad; pRight.rotation.y = Math.PI/2; group.add(pRight);
+        let pLeft = new THREE.Mesh(new THREE.PlaneGeometry(d, h), decalMat); pLeft.position.x = -w/2 - pad; pLeft.rotation.y = -Math.PI/2; group.add(pLeft);
+        let pTop = new THREE.Mesh(new THREE.PlaneGeometry(w, d), decalMat); pTop.position.y = h/2 + pad; pTop.rotation.x = -Math.PI/2; group.add(pTop);
+        let pBottom = new THREE.Mesh(new THREE.PlaneGeometry(w, d), decalMat); pBottom.position.y = -h/2 - pad; pBottom.rotation.x = Math.PI/2; group.add(pBottom);
+    }
+
+    const geomCache = {};
+    function getGeometry(thickness, isBlocky) {
+        const key = `${thickness.toFixed(3)}_${isBlocky}`;
+        if (!geomCache[key]) {
+            if (isBlocky) geomCache[key] = new THREE.BoxGeometry(thickness, 1, thickness);
+            else geomCache[key] = new THREE.CylinderGeometry(thickness/2, thickness/2, 1, 7);
+        }
+        return geomCache[key];
+    }
+
+    class TreeSection {
+        constructor(baseCFrame, isTrunk, initialThickness) {
+            this.baseCFrame = baseCFrame.clone();
+            this.length = 0.01; 
+            this.thickness = initialThickness;
+            this.isTrunk = isTrunk;
+            this.isExtremity = true;
+            this.distSplit = isTrunk ? getAvg('TrunkDistSplit') : getAvg('DistSplits');
+            this.distBend = isTrunk ? getAvg('TrunkDistBend') : getAvg('DistBends');
+            this.distBranch = isTrunk ? getAvg('TrunkDistBranch') : getAvg('DistBranch');
+        }
+    }
+
+    let seedCounter = 0; 
+    function forceReRoll() { seedCounter++; updateAll(); }
+
+    function simulateGrowth() {
+        let sections = [];
+        let rootCursor = new THREE.Object3D();
+        
+        rootCursor.rotateY(randomRange('TrunkAngleTheta') * (Math.PI/180));
+        rootCursor.rotateX(randomRange('TrunkAnglePhi') * (Math.PI/180));
+
+        let seed = new TreeSection(rootCursor, true, randomRange('SeedThickness'));
+        sections.push(seed);
+
+        let maxCalls = Math.round(randomRange('MaxGrowCalls'));
+        let lenGrow = getAvg('LengthGrow');
+        let thickGrow = getAvg('ThicknessGrow');
+        let cutoff = getVal('NewBranchCutoff');
+        let maxSections = 4000;
+
+        for (let call = 0; call < maxCalls; call++) {
+            if (sections.length > maxSections) break;
+
+            let activeSections = sections.filter(s => s.isExtremity);
+            let allowNewBranches = (maxCalls - call) > cutoff; 
+            
+            for (let sec of activeSections) {
+                sec.length += lenGrow;
+                sec.thickness += thickGrow;
+                sec.distSplit -= 1; sec.distBend -= 1; sec.distBranch -= 1;
+
+                let didSplit = false;
+                let didBranch = false;
+
+                if (allowNewBranches && Math.round(getAvg('DistSplits')) > 0 && sec.distSplit <= 0 && sec.length > 0.5) {
+                    sec.isExtremity = false;
+                    let numSplits = Math.round(randomRange('NumSplits'));
+                    let splitAngle = randomRange('SplitAngle') * (Math.PI / 180);
+                    let thickReduce = randomRange('SplitThicknessReduce');
+
+                    for (let i=0; i<numSplits; i++) {
+                        let newCursor = sec.baseCFrame.clone();
+                        newCursor.translateY(sec.length); 
+                        newCursor.rotateY((Math.PI*2 / numSplits) * i);
+                        newCursor.rotateX(splitAngle);
+                        
+                        let yMin = getVal('SplitYConst').min;
+                        if(yMin > -0.5) newCursor.rotateX(-0.2); 
+
+                        sections.push(new TreeSection(newCursor, false, Math.max(0.05, sec.thickness - thickReduce)));
+                    }
+                    didSplit = true;
+                }
+
+                if (allowNewBranches && !didSplit && Math.round(getAvg('DistBranch')) > 0 && sec.distBranch <= 0 && sec.length > 0.5) {
+                    let numBranches = Math.round(randomRange('NumBranches'));
+                    let branchAngle = randomRange('BranchAngle') * (Math.PI / 180);
+
+                    for (let i=0; i<numBranches; i++) {
+                        let newCursor = sec.baseCFrame.clone();
+                        newCursor.translateY(sec.length);
+                        newCursor.rotateY(Math.random() * Math.PI * 2);
+                        newCursor.rotateX(branchAngle);
+                        sections.push(new TreeSection(newCursor, false, Math.max(0.05, sec.thickness - randomRange('SplitThicknessReduce'))));
+                    }
+                    sec.distBranch = getAvg('DistBranch'); 
+                    didBranch = true;
+                }
+
+                if (allowNewBranches && !didSplit && !didBranch && Math.round(getAvg('DistBends')) > 0 && sec.distBend <= 0 && sec.length > 0.5) {
+                    sec.isExtremity = false;
+                    let newCursor = sec.baseCFrame.clone();
+                    newCursor.translateY(sec.length);
+                    newCursor.rotateY(Math.random() * Math.PI * 2);
+                    newCursor.rotateX(randomRange('BendAngle') * (Math.PI / 180));
+
+                    sections.push(new TreeSection(newCursor, sec.isTrunk, Math.max(0.05, sec.thickness - randomRange('BendThicknessReduce'))));
+                }
+            }
+        }
+        return sections;
+    }
+
+    function render3D() {
+        document.getElementById('loadingMsg').style.display = 'block';
+        
+        setTimeout(() => {
+            while(treeGroup.children.length > 0){ treeGroup.remove(treeGroup.children[0]); }
+            
+            let sections = simulateGrowth();
+            let isBlocky = getVal('Blocky');
+            let isBamboo = getVal('Bamboo');
+            let hasFruit = getVal('HasFruit');
+            
+            let woodMat = createMat(getVal('WoodColor').hex, getVal('WoodMaterial'), getVal('WoodReflectance'), 0);
+            let barkMat = createMat(getVal('BarkColor').hex, getVal('BarkMaterial'), getVal('BarkReflectance'), getVal('BarkTransparency'));
+            let barkThick = getVal('BarkThickness');
+            
+            let partCount = 0;
+            let totalWoodVolume = 0; // Tracks total cubic studs for the tree
+
+            for (let sec of sections) {
+                // Volume Calculation: Width * Length * Depth
+                totalWoodVolume += (sec.thickness * sec.length * sec.thickness);
+
+                let woodGroup = new THREE.Group();
+                let centerCursor = sec.baseCFrame.clone();
+                centerCursor.translateY(sec.length / 2);
+                woodGroup.position.copy(centerCursor.position);
+                woodGroup.quaternion.copy(centerCursor.quaternion);
+                
+                let woodGeom = getGeometry(sec.thickness, isBlocky);
+                let wood = new THREE.Mesh(woodGeom, woodMat);
+                wood.scale.set(1, sec.length, 1);
+                woodGroup.add(wood);
+                
+                if (loadedTextures.ScriptIn) {
+                    attachDecalsToGroup(woodGroup, sec.thickness, sec.length, sec.thickness, loadedTextures.ScriptIn);
+                }
+                
+                treeGroup.add(woodGroup);
+                partCount++;
+
+                if (barkThick > 0) {
+                    let barkGroup = new THREE.Group();
+                    barkGroup.position.copy(centerCursor.position);
+                    barkGroup.quaternion.copy(centerCursor.quaternion);
+
+                    let barkGeom = getGeometry(sec.thickness + barkThick, isBlocky);
+                    let bark = new THREE.Mesh(barkGeom, barkMat);
+                    bark.scale.set(1, sec.length, 1);
+                    barkGroup.add(bark);
+
+                    if (loadedTextures.BarkContents) {
+                        let totalThick = sec.thickness + barkThick;
+                        attachDecalsToGroup(barkGroup, totalThick, sec.length, totalThick, loadedTextures.BarkContents);
+                    }
+
+                    treeGroup.add(barkGroup);
+                    partCount++;
+                }
+
+                if (isBamboo) {
+                    let ringGeom = new THREE.TorusGeometry((sec.thickness + barkThick)/2 + 0.03, 0.04, 6, 12);
+                    let ringMat = new THREE.MeshStandardMaterial({ color: 0x112205, roughness: 0.9 });
+                    let ring = new THREE.Mesh(ringGeom, ringMat);
+                    let ringPos = sec.baseCFrame.clone();
+                    ringPos.translateY(sec.length);
+                    ring.position.copy(ringPos.position);
+                    ring.quaternion.copy(ringPos.quaternion);
+                    ring.rotation.x = Math.PI/2;
+                    treeGroup.add(ring);
+                    partCount++;
+                }
+
+                if (sec.isExtremity) {
+                    let numLeaves = Math.round(randomRange('NumLeafParts'));
+                    let leafMat = createMat(getVal('LeafColor').hex, getVal('LeafMaterial'), 0);
+                    
+                    for(let l = 0; l < numLeaves; l++) {
+                        let lx = randomRange('LeafSizeX') * sec.thickness;
+                        let ly = randomRange('LeafSizeY') * sec.thickness;
+                        let lz = randomRange('LeafSizeZ') * sec.thickness;
+                        
+                        let leafGroup = new THREE.Group();
+                        let endCursor = sec.baseCFrame.clone();
+                        endCursor.translateY(sec.length); 
+                        endCursor.rotateX(randomRange('LeafAngleX') * (Math.PI/180));
+                        endCursor.rotateY(randomRange('LeafAngleY') * (Math.PI/180));
+                        endCursor.rotateZ(randomRange('LeafAngleZ') * (Math.PI/180));
+                        leafGroup.position.copy(endCursor.position);
+                        leafGroup.quaternion.copy(endCursor.quaternion);
+
+                        let leafGeom = new THREE.BoxGeometry(lx, ly, lz);
+                        let leaf = new THREE.Mesh(leafGeom, leafMat);
+                        leafGroup.add(leaf);
+
+                        if (loadedTextures.LeavesIn) {
+                            attachDecalsToGroup(leafGroup, lx, ly, lz, loadedTextures.LeavesIn);
+                        }
+                        
+                        treeGroup.add(leafGroup);
+                        partCount++;
+
+                        if (hasFruit) {
+                            let fAmount = Math.max(1, Math.round(randomRange('FruitAmount')));
+                            let fScale = randomRange('FruitScale') * 0.15;
+                            let fGeom = new THREE.SphereGeometry(fScale, 8, 8);
+                            let fMat = new THREE.MeshStandardMaterial({ color: 0xffd700, roughness: 0.3 });
+
+                            for(let f=0; f<fAmount; f++) {
+                                let fruit = new THREE.Mesh(fGeom, fMat);
+                                fruit.position.set(
+                                    leafGroup.position.x + (Math.random()-0.5)*lx,
+                                    leafGroup.position.y + (Math.random()-0.5)*ly,
+                                    leafGroup.position.z + (Math.random()-0.5)*lz
+                                );
+                                treeGroup.add(fruit);
+                                partCount++;
+                            }
+                        }
+                    }
+                }
+            }
+
+            let limitWarning = partCount >= 8000 ? ' (SAFE LIMIT HIT)' : '';
+            document.getElementById('partCounter').innerText = `Parts: ${partCount}${limitWarning}`;
+            document.getElementById('partCounter').style.color = partCount >= 8000 ? '#f44336' : 'white';
+            
+            // Calculate Value using Furnace Math
+            let logValue = getVal('LogValue');
+            let plankValue = getVal('PlankValue');
+            let finalLogValue = Math.round((totalWoodVolume * logValue) / 10);
+            let finalPlankValue = Math.round((totalWoodVolume * plankValue) / 10);
+            
+            document.getElementById('valueCounter').innerHTML = `💵 Log: $${finalLogValue.toLocaleString()} | Plank: $${finalPlankValue.toLocaleString()}`;
+
+            document.getElementById('loadingMsg').style.display = 'none';
+        }, 10);
+    }
+
+    function generateLua() {
+        const str = (v) => v === 'nil' || v === 'true' || v === 'false' || v === '' ? 'nil' : `"${v}"`;
+        const rblxColor = (c) => `BrickColor.new("${c.rblx}")`;
+        const mat = (m) => `Enum.Material.${m}`;
+        const rng = (prop) => `{ min=${getVal(prop).min}, max=${getVal(prop).max} }`;
+
+        let code = `SuperTree = require(game.ServerScriptService.Trees.TreeSuperClass)\n\nTree = {}\nTree.__index = Tree\nsetmetatable(Tree, SuperTree)\n\nfunction Tree.new(...)\n    local newtree = SuperTree.new(...)\n    setmetatable(newtree, Tree)\n`;
+
+        const decalProps = ['ScriptIn', 'BarkContents', 'LeavesIn'];
+        decalProps.forEach(prop => {
+            if (loadedTextures[prop]) {
+                code += `\n    local decals_${prop} = {}\n    for _, face in pairs({Enum.NormalId.Front,Enum.NormalId.Back,Enum.NormalId.Top,Enum.NormalId.Bottom,Enum.NormalId.Left,Enum.NormalId.Right}) do\n        local decal = Instance.new("Decal")\n        decal.Face = face\n        decal.Texture = "rbxasset://0" -- Replace with actual image asset ID\n        table.insert(decals_${prop}, decal)\n    end\n`;
+            }
+        });
+
+        code += `\n    --------------[[ Wood Stats ]]--------------\n    newtree.Name = "${getVal('Name')}"\n    newtree.Hardness = ${getVal('Hardness')}\n    newtree.LogValue = ${getVal('LogValue')}\n    newtree.PlankValue = ${getVal('PlankValue')}\n`;
+
+        if (getVal('Blocky')) code += `    newtree.Blocky = true\n`;
+        if (getVal('Massless')) code += `    newtree.Massless = true\n`;
+
+        code += `\n    --------------[[ Appearance ]]--------------\n    newtree.WoodColor = ${rblxColor(getVal('WoodColor'))}\n    newtree.WoodMaterial = ${mat(getVal('WoodMaterial'))}\n    newtree.WoodReflectance = ${getVal('WoodReflectance')}\n`;
+        
+        if (loadedTextures.ScriptIn) code += `    newtree.ScriptIn = decals_ScriptIn\n`;
+        
+        code += `    \n    newtree.BarkColor = ${rblxColor(getVal('BarkColor'))}\n    newtree.BarkMaterial = ${mat(getVal('BarkMaterial'))}\n    newtree.BarkThickness = ${getVal('BarkThickness')}\n    newtree.BarkReflectance = ${getVal('BarkReflectance')}\n`;
+
+        if (loadedTextures.BarkContents) code += `    newtree.BarkContents = decals_BarkContents\n`;
+        if (getVal('BarkTransparency') > 0) code += `    newtree.BarkTransparency = ${getVal('BarkTransparency')}\n`;
+        if (getVal('BarkTextureId') !== '') code += `    newtree.BarkTextureId = "${getVal('BarkTextureId')}"\n`;
+        if (getVal('BarkMesh') !== '') code += `    newtree.BarkMesh = "${getVal('BarkMesh')}"\n`;
+        if (getVal('Bamboo')) code += `    newtree.Bamboo = true\n`;
+        if (getVal('CustomModel') !== '') code += `    newtree.CustomModel = "${getVal('CustomModel')}"\n`;
+
+        let leavesInStr = loadedTextures.LeavesIn ? `, LeavesIn = decals_LeavesIn` : ``;
+        code += `\n    newtree.LeafColors={{Material=${mat(getVal('LeafMaterial'))}, Color=${rblxColor(getVal('LeafColor'))}${leavesInStr}}}\n    newtree.NumLeafParts = ${rng('NumLeafParts')}\n    newtree.LeafAngle = { X = ${rng('LeafAngleX')}, Y = ${rng('LeafAngleY')}, Z = ${rng('LeafAngleZ')} }\n    newtree.LeafSizeFactor = { X = ${rng('LeafSizeX')}, Y = ${rng('LeafSizeY')}, Z = ${rng('LeafSizeZ')} }\n`;
+
+        if (getVal('HasFruit')) {
+            code += `\n    --------------[[ Fruit System ]]--------------\n    newtree.Fruit = {\n        model = game.ReplicatedStorage.Models.Fruits.Fruit,\n        scale = ${rng('FruitScale')},\n        amount = ${rng('FruitAmount')},\n        value = ${getVal('FruitValue')}\n    }\n`;
+        }
+
+        code += `\n    --------------[[ Growth Behavior ]]--------------\n    newtree.GrowInterval = ${rng('GrowInterval')}\n    newtree.MaxGrowCalls = ${rng('MaxGrowCalls')}\n    newtree.NewBranchCutoff = ${getVal('NewBranchCutoff')}\n    newtree.LifetimePerVolume = ${getVal('LifetimePerVolume')}\n    newtree.LeafDropTime = ${getVal('LeafDropTime')}\n\n    newtree.SeedThickness = ${rng('SeedThickness')}\n    newtree.ThicknessGrow = ${rng('ThicknessGrow')}\n    newtree.LengthGrow = ${rng('LengthGrow')}\n    newtree.BendThicknessReduce = ${rng('BendThicknessReduce')}\n    newtree.SplitThicknessReduce = ${rng('SplitThicknessReduce')}\n\n    newtree.TrunkAnglePhi = ${rng('TrunkAnglePhi')}\n    newtree.TrunkAngleTheta = ${rng('TrunkAngleTheta')}\n    newtree.TrunkDistanceUntilBending = ${rng('TrunkDistBend')}\n    newtree.TrunkDistanceUntilSpliting = ${rng('TrunkDistSplit')}\n    newtree.TrunkDistanceUntilBranching = ${rng('TrunkDistBranch')}\n\n    newtree.DistanceBetweenSplits = ${rng('DistSplits')}\n    newtree.NumSplits = ${rng('NumSplits')}\n    newtree.SplitAngle = ${rng('SplitAngle')}\n    newtree.AllowableAngleBetweenSplits = ${rng('AllowableSplitAngle')}\n    newtree.SplitUnitYComponentConstraints = ${rng('SplitYConst')}\n\n    newtree.DistanceBetweenBends = ${rng('DistBends')}\n    newtree.BendAngle = ${rng('BendAngle')}\n    newtree.BendUnitYComponentConstraints = ${rng('BendYConst')}\n\n    newtree.DistanceBetweenBranching = ${rng('DistBranch')}\n    newtree.NumBranches = ${rng('NumBranches')}\n    newtree.BranchAngle = ${rng('BranchAngle')}\n    newtree.AllowableAngleBetweenBranches = ${rng('AllowableBranchAngle')}\n    newtree.BranchUnitYComponentConstraints = ${rng('BranchYConst')}\n\n    newtree.SpaceCheckCone = {Distance=${getVal('SpaceCheckDist')}, Angle=${getVal('SpaceCheckAngle')}}\n    newtree.NumNewSegmentAttempts = ${getVal('NumNewSegmentAttempts')}\n    newtree.MinSpawnDistanceToOtherTrees = ${getVal('MinSpawnDist')}\n`;
+        
+        if(getVal('MoveTroll')) code += `    newtree.MoveTroll = true\n`;
+        code += `\n    return newtree\nend\n\nreturn Tree`;
+
+        document.getElementById('luaOutput').value = code;
+    }
+
+    function updateAll() {
+        generateLua();
+        clearTimeout(window.renderTimer);
+        window.renderTimer = setTimeout(render3D, 200);
+    }
+    function animate() { requestAnimationFrame(animate); controls.update(); renderer.render(scene, camera); }
+
+    createUI();
+    updateAll();
+    animate();
+</script>
+</body>
+</html>
